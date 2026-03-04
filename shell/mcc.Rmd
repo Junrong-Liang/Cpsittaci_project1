@@ -1,0 +1,330 @@
+---
+title: "mcc"
+author: "Letty Liang"
+date: "2025-09-25"
+output: html_document
+---
+```{r}
+library(readxl);library(ggplot2);library(reshape2);library(scales)
+library(metR);library(writexl);library(Matrix);library(ggpubr)
+library(RColorBrewer);library(tidyverse);library(plyr);library(dplyr)
+library(lubridate);library(zoo);library(Rmisc);library(cowplot)
+library(dplyr)
+rm(list = ls())
+Sys.setlocale("LC_TIME", "English") #print in english
+```
+
+
+```{r}
+df <- read.table("loc_jumpTimes.txt", header = TRUE, sep = "\t")
+df$date <- 2025 - df$time
+data <- df[,c(1:3,5)]
+colnames(data)[4] <- "time"
+data <- subset(data, data$time >= 1920)
+
+cal_period_when <- function(time_num) {
+  start_year <- 1920
+  end_year <- 2024
+  period <- floor(time_num - start_year)
+  return(period)
+}
+
+data$period <- cal_period_when(data$time)
+
+data$jump = 1
+colnames(data)[1] <- "treeId"
+colnames(data)[2] <- "startLocation"
+colnames(data)[3] <- "endLocation"
+
+subset_data <- function(data, start_location, end_location, new_name) {
+  subset(data, startLocation == start_location & endLocation == end_location) %>%
+    `attr<-`("name", new_name)
+}
+
+# define location
+locations <- c("ChinaNR", "ChinaNWR", "ChinaSR", "ChinaQTR", "EAsia", "SAsia", "Europe", "NAmerica",  "Oceania")
+
+combinations <- expand.grid(startLocation = locations, endLocation = locations)
+combinations <- combinations[combinations$startLocation != combinations$endLocation, ]
+results <- lapply(1:nrow(combinations), function(i) {
+  start_location <- combinations$startLocation[i]
+  end_location <- combinations$endLocation[i]
+  new_name <- paste0(start_location, "To", end_location)
+  subset_data(data, start_location, end_location, new_name)
+})
+names(results) <- sapply(results, attr, "name")
+list2env(results, envir = .GlobalEnv)
+data_sets <- sapply(results, attr, "name")
+print(data_sets)
+assign_markov_jumps_num <- function(df) {
+  df %>%
+    arrange(treeId, time) %>%
+    transform(MarkovJumpsNum = unlist(tapply(time, treeId, function(x) 1:length(x))))
+}
+data_sets <- c(
+  "ChinaNRToChinaNWR", "ChinaNRToChinaSR", "ChinaNRToChinaQTR", "ChinaNRToEAsia", "ChinaNRToSAsia", 
+  "ChinaNRToEurope", "ChinaNRToNAmerica",  "ChinaNRToOceania",
+  "ChinaNWRToChinaNR", "ChinaNWRToChinaSR", "ChinaNWRToChinaQTR", "ChinaNWRToEAsia", "ChinaNWRToSAsia", 
+  "ChinaNWRToEurope", "ChinaNWRToNAmerica",  "ChinaNWRToOceania",
+  "ChinaSRToChinaNR", "ChinaSRToChinaNWR", "ChinaSRToChinaQTR", "ChinaSRToEAsia", "ChinaSRToSAsia", 
+  "ChinaSRToEurope", "ChinaSRToNAmerica",  "ChinaSRToOceania",
+  "ChinaQTRToChinaNR", "ChinaQTRToChinaNWR", "ChinaQTRToChinaSR", "ChinaQTRToEAsia", "ChinaQTRToSAsia", 
+  "ChinaQTRToEurope", "ChinaQTRToNAmerica",  "ChinaQTRToOceania",
+  "EAsiaToChinaNR", "EAsiaToChinaNWR", "EAsiaToChinaSR", "EAsiaToChinaQTR", "EAsiaToSAsia", 
+  "EAsiaToEurope", "EAsiaToNAmerica",  "EAsiaToOceania",
+  "SAsiaToChinaNR", "SAsiaToChinaNWR", "SAsiaToChinaSR", "SAsiaToChinaQTR", "SAsiaToEAsia", 
+  "SAsiaToEurope", "SAsiaToNAmerica",  "SAsiaToOceania",
+  "EuropeToChinaNR", "EuropeToChinaNWR", "EuropeToChinaSR", "EuropeToChinaQTR", "EuropeToEAsia", "EuropeToSAsia",
+   "EuropeToNAmerica",  "EuropeToOceania",
+  "NAmericaToChinaNR", "NAmericaToChinaNWR", "NAmericaToChinaSR", "NAmericaToChinaQTR", "NAmericaToEAsia", "NAmericaToSAsia",
+   "NAmericaToEurope",  "NAmericaToOceania",
+  "OceaniaToChinaNR", "OceaniaToChinaNWR", "OceaniaToChinaSR", "OceaniaToChinaQTR", "OceaniaToEAsia", "OceaniaToSAsia",
+   "OceaniaToEurope", "OceaniaToNAmerica"
+)
+
+datasets <- mget(data_sets)
+results <- lapply(datasets, assign_markov_jumps_num)
+
+
+names(results) <- data_sets
+list2env(results, envir = .GlobalEnv)
+
+
+for (ds in data_sets) {
+  data <- get(ds)
+  data$group <- ds
+  assign(ds, data)
+}
+
+
+
+```
+
+```{r}
+# filter MarkovJumpsNum max value
+filter_max_MJs <- function(df) {
+  df %>% group_by(treeId, period) %>% slice(which.max(MarkovJumpsNum))
+}
+
+process_datasets <- function(datasets, filter_func,group_names) {
+  results_filter <- list()
+  results_peryear <- list()
+  results_peryear_count <- list()
+  
+  for (i in seq_along(datasets)) {
+    df <- datasets[[i]]
+    group_name <- group_names[i]
+    df_filter <- filter_func(df)
+    results_filter[[i]] <- df_filter
+
+  }
+  
+  list(filter = do.call(rbind, results_filter))
+}
+```
+
+```{r}
+# siginificant MJs datasets
+datasets <- list(
+  EuropeToChinaNR,ChinaNRToChinaNWR,ChinaSRToChinaQTR,EuropeToOceania,EuropeToNAmerica
+)
+
+group_names <- c(
+  "EuropeToChinaNR","ChinaNRToChinaNWR", "ChinaSRToChinaQTR","EuropeToOceania","EuropeToNAmerica"
+)
+
+results <- process_datasets(datasets, filter_max_MJs, group_names)
+
+final_data_filter <- results$filter
+
+#write.csv(final_data_filter, "final_data_MJs.csv")
+```
+
+### random-resample
+```{r}
+
+final_data_filter$period <- final_data_filter$period+1920
+
+final_data <-final_data_filter
+treeid <- seq(min(final_data$treeId),max(final_data$treeId),30000)
+treeid_num <- 5000
+random_treeid <- sample(treeid, treeid_num, replace = FALSE,prob = NULL)
+random_state <- filter(final_data, treeId %in% random_treeid)
+
+final_data <- random_state
+
+```
+
+```{r}
+ggplot() +
+  geom_step(data=subset(final_data,final_data$group == "EuropeToNAmerica"), 
+            aes(x=time, y=MarkovJumpsNum,group = treeId),alpha=0.1,color = "#EFA2B5")+
+  geom_step(data=subset(final_data,final_data$group == "EuropeToChinaNR"), 
+            aes(x=time, y=MarkovJumpsNum,group = treeId),alpha=0.1,color = "#84C077")+
+    geom_step(data=subset(final_data,final_data$group == "EuropeToOceania"), 
+            aes(x=time, y=MarkovJumpsNum,group = treeId),alpha=0.1,color = "#FFC184")+
+  geom_step(data=subset(final_data,final_data$group == "ChinaNRToChinaNWR"), 
+            aes(x=time, y=MarkovJumpsNum,group = treeId),alpha=0.1,color = "#3A8D9A")+
+  geom_step(data=subset(final_data,final_data$group == "ChinaSRToChinaQTR"), 
+            aes(x=time, y=MarkovJumpsNum,group = treeId),alpha=0.1,color = "#F1644A")+
+  scale_x_continuous(limits = c(1919,2025), breaks=seq(1920,2025,20),expand = c(0.01,0))+
+  scale_y_continuous(limits = c(0,10), breaks=seq(0,10,2),expand = c(0.01,0))+
+  labs(x="Time",y="Cumulative number of 
+       Markov jumps between region")+
+  theme_bw()+
+  theme(axis.title=element_text(size = 14,color = "black"),
+        axis.text=element_text(size = 12,color = "black"),
+        axis.line.x = element_line(color = "black",size = 0),
+        axis.line.y = element_line(color = "black",size = 0),
+        legend.text=element_text(size = 12),
+        legend.title=element_blank(),
+        legend.position = c(0.2,0.2),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  theme(plot.caption = element_text(hjust=0),
+        plot.margin = unit(c(1,1,0,1), "lines"),
+        legend.key.width = unit(1.1,"cm"),
+        legend.key.height = unit(0.8,"cm"))
+```
+#host-china
+```{r}
+df <- read.table("host_jumpTimes.txt", header = TRUE, sep = "\t")
+df$date <- 2025 - df$time
+data <- df[,c(1:3,5)]
+colnames(data)[4] <- "time"
+data <- subset(data, data$time >= 1920)
+
+cal_period_when <- function(time_num) {
+  start_year <- 1920
+  end_year <- 2024
+  period <- floor(time_num - start_year)
+  return(period)
+}
+
+data$period <- cal_period_when(data$time)
+
+data$jump = 1
+colnames(data)[1] <- "treeId"
+colnames(data)[2] <- "startLocation"
+colnames(data)[3] <- "endLocation"
+
+subset_data <- function(data, start_location, end_location, new_name) {
+  subset(data, startLocation == start_location & endLocation == end_location) %>%
+    `attr<-`("name", new_name)
+}
+
+# define location
+locations <- c("Human", "other", "bird", "parrot", "pigeon")
+
+combinations <- expand.grid(startLocation = locations, endLocation = locations)
+combinations <- combinations[combinations$startLocation != combinations$endLocation, ]
+results <- lapply(1:nrow(combinations), function(i) {
+  start_location <- combinations$startLocation[i]
+  end_location <- combinations$endLocation[i]
+  new_name <- paste0(start_location, "To", end_location)
+  subset_data(data, start_location, end_location, new_name)
+})
+names(results) <- sapply(results, attr, "name")
+list2env(results, envir = .GlobalEnv)
+data_sets <- sapply(results, attr, "name")
+print(data_sets)
+assign_markov_jumps_num <- function(df) {
+  df %>%
+    arrange(treeId, time) %>%
+    transform(MarkovJumpsNum = unlist(tapply(time, treeId, function(x) 1:length(x))))
+}
+data_sets <- c(
+  "HumanToother", "HumanTobird", "HumanToparrot", "HumanTopigeon",
+  "otherToHuman", "otherTobird", "otherToparrot", "otherTopigeon",
+  "birdToHuman", "birdToother", "birdToparrot", "birdTopigeon",
+  "parrotToHuman", "parrotToother", "parrotTobird", "parrotTopigeon",
+  "pigeonToHuman", "pigeonToother", "pigeonToparrot", "pigeonTobird"
+)
+
+datasets <- mget(data_sets)
+results <- lapply(datasets, assign_markov_jumps_num)
+
+
+names(results) <- data_sets
+list2env(results, envir = .GlobalEnv)
+
+
+for (ds in data_sets) {
+  data <- get(ds)
+  data$group <- ds
+  assign(ds, data)
+}
+```
+```{r}
+# siginificant MJs datasets
+datasets <- list(
+  otherToHuman,HumanTopigeon
+)
+
+group_names <- c(
+  "otherToHuman","HumanTopigeon"
+)
+
+results <- process_datasets(datasets, filter_max_MJs, group_names)
+
+final_data_filter <- results$filter
+
+#write.csv(final_data_filter, "final_data_MJ_host.csv")
+```
+
+### random-resample
+```{r}
+
+final_data_filter$period <- final_data_filter$period+1920
+
+final_data <-final_data_filter
+treeid <- seq(min(final_data$treeId),max(final_data$treeId),30000)
+treeid_num <- 5000
+random_treeid <- sample(treeid, treeid_num, replace = FALSE,prob = NULL)
+random_state <- filter(final_data, treeId %in% random_treeid)
+
+final_data <- random_state
+
+```
+
+```{r}
+ggplot() +
+  geom_step(data=subset(final_data,final_data$group == "otherToHuman"), 
+            aes(x=time, y=MarkovJumpsNum,group = treeId),alpha=0.1,color = "#EFA2B5")+
+  geom_step(data=subset(final_data,final_data$group == "HumanTopigeon"), 
+            aes(x=time, y=MarkovJumpsNum,group = treeId),alpha=0.1,color = "#84C077")+
+  scale_x_continuous(limits = c(1919,2025), breaks=seq(1920,2025,20),expand = c(0.01,0))+
+  scale_y_continuous(limits = c(0,10), breaks=seq(0,10,2),expand = c(0.01,0))+
+  labs(x="Time",y="Cumulative number of 
+       Markov jumps between host")+
+  theme_bw()+
+  theme(axis.title=element_text(size = 14,color = "black"),
+        axis.text=element_text(size = 12,color = "black"),
+        axis.line.x = element_line(color = "black",size = 0),
+        axis.line.y = element_line(color = "black",size = 0),
+        legend.text=element_text(size = 12),
+        legend.title=element_blank(),
+        legend.position = c(0.2,0.2),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  theme(plot.caption = element_text(hjust=0),
+        plot.margin = unit(c(1,1,0,1), "lines"),
+        legend.key.width = unit(1.1,"cm"),
+        legend.key.height = unit(0.8,"cm"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
